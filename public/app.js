@@ -1,10 +1,12 @@
-/* Milk client v1 frontend — expressive face + chat + voice. */
+/* Milk client v2 frontend — expressive face + agent chat + voice.
+   The agent works as a background job; the UI polls so you can watch it use tools live. */
 (function () {
   'use strict';
 
   var face = document.getElementById('face');
   var ctx = face.getContext('2d');
   var stateLabel = document.getElementById('state-label');
+  var agentStatus = document.getElementById('agent-status');
   var log = document.getElementById('log');
   var input = document.getElementById('input');
   var sendBtn = document.getElementById('send-btn');
@@ -16,33 +18,26 @@
   var voiceOn = true;
   var history = []; // {role:'user'|'assistant', text}
   var busy = false;
+  var pollTimer = null;
 
-  function setFace(s) {
-    faceState = s;
-    stateLabel.textContent = s;
-  }
+  function setFace(s) { faceState = s; stateLabel.textContent = s; }
+  function setAgentStatus(t) { agentStatus.textContent = t || ''; }
 
   /* ---------- expressive face ---------- */
   var blinkAt = 0, blinkPhase = 0;
   function drawFace(t) {
     var W = face.width, H = face.height;
     ctx.clearRect(0, 0, W, H);
-
-    // LCD bezel
     ctx.fillStyle = '#050507';
     roundRect(0, 0, W, H, 24); ctx.fill();
     ctx.fillStyle = '#0b0b10';
     roundRect(14, 14, W - 28, H - 28, 16); ctx.fill();
 
     var cx = W / 2, cy = H / 2 - 10;
-
-    // blink timing
     if (t > blinkAt) { blinkPhase = t; blinkAt = t + 2200 + Math.random() * 2600; }
-    var blink = 1;
-    var bt = t - blinkPhase;
+    var blink = 1, bt = t - blinkPhase;
     if (bt < 140) blink = 1 - Math.sin((bt / 140) * Math.PI) * 0.92;
 
-    // eye look direction
     var lookX = 0, lookY = 0;
     if (faceState === 'thinking') { lookX = Math.sin(t / 450) * 14; lookY = -4; }
     if (faceState === 'listening') { lookY = -6; }
@@ -50,20 +45,15 @@
 
     var eyeOpen = (faceState === 'listening' ? 1.15 : 1) * blink;
     var eyeW = 64, eyeH = 84 * eyeOpen;
-
     drawEye(cx - 90, cy, eyeW, eyeH, lookX, lookY);
     drawEye(cx + 90, cy, eyeW, eyeH, lookX, lookY);
 
-    // mouth
     var mw = 90, mh = 12;
     if (faceState === 'talking') {
       mh = 10 + Math.abs(Math.sin(t / 110)) * 34 + Math.abs(Math.sin(t / 61)) * 10;
       mw = 90 + Math.sin(t / 130) * 8;
-    } else if (faceState === 'thinking') {
-      mh = 8; mw = 60;
-    } else if (faceState === 'listening') {
-      mh = 16; mw = 44;
-    }
+    } else if (faceState === 'thinking') { mh = 8; mw = 60; }
+    else if (faceState === 'listening') { mh = 16; mw = 44; }
     ctx.fillStyle = '#e8e6e3';
     ctx.beginPath();
     ctx.ellipse(cx, cy + 108, mw / 2, Math.max(mh / 2, 3), 0, 0, Math.PI * 2);
@@ -74,14 +64,11 @@
       ctx.ellipse(cx, cy + 108 + mh / 6, mw / 4, Math.max(mh / 4, 2), 0, 0, Math.PI * 2);
       ctx.fill();
     }
-
-    // subtle cheeks when talking
     if (faceState === 'talking' || faceState === 'listening') {
       ctx.fillStyle = 'rgba(201,167,255,0.18)';
       ctx.beginPath(); ctx.ellipse(cx - 150, cy + 70, 26, 16, 0, 0, Math.PI * 2); ctx.fill();
       ctx.beginPath(); ctx.ellipse(cx + 150, cy + 70, 26, 16, 0, 0, Math.PI * 2); ctx.fill();
     }
-
     requestAnimationFrame(drawFace);
   }
 
@@ -115,9 +102,7 @@
       s.className = 'who'; s.textContent = 'Milk 🥛';
       d.appendChild(s);
       d.appendChild(document.createTextNode(text));
-    } else {
-      d.textContent = text;
-    }
+    } else { d.textContent = text; }
     log.appendChild(d);
     log.scrollTop = log.scrollHeight;
   }
@@ -129,44 +114,87 @@
     log.scrollTop = log.scrollHeight;
   }
 
+  var TOOL_LABELS = {
+    web_search: 'searching the web', web_fetch: 'reading a page',
+    run_command: 'running a command', read_file: 'reading a file',
+    write_file: 'writing a file', remember: 'saving a memory',
+    recall: 'checking memories', get_time: 'checking the time'
+  };
+
   function sendMessage(text) {
     text = (text || input.value).trim();
     if (!text || busy) return;
     busy = true;
     input.value = '';
     addMsg('user', text);
+    var histForJob = history.slice();
     history.push({ role: 'user', text: text });
     setFace('thinking');
+    setAgentStatus('thinking…');
 
     fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: text, history: history.slice(0, -1) }),
+      body: JSON.stringify({ message: text, history: histForJob })
     })
       .then(function (r) { return r.json().then(function (j) { return { status: r.status, body: j }; }); })
       .then(function (res) {
-        busy = false;
         if (res.status === 503 || res.body.error === 'no-key') {
+          busy = false;
           banner.classList.remove('hidden');
           addSys('No brain connected — add your Gemini API key to .env and restart.');
-          setFace('idle');
+          setFace('idle'); setAgentStatus('');
           return;
         }
-        if (res.body.error || !res.body.reply) {
-          addSys("Hmm, my brain glitched. Try again in a sec.");
-          setFace('idle');
+        if (res.body.error || !res.body.jobId) {
+          busy = false;
+          addSys("Couldn't start the agent. Is the server still running?");
+          setFace('idle'); setAgentStatus('');
           return;
         }
-        var reply = res.body.reply;
-        history.push({ role: 'assistant', text: reply });
-        addMsg('milk', reply);
-        speak(reply);
+        pollJob(res.body.jobId, 0);
       })
       .catch(function () {
         busy = false;
         addSys('Could not reach the server. Is it still running?');
-        setFace('idle');
+        setFace('idle'); setAgentStatus('');
       });
+  }
+
+  function pollJob(jobId, seen) {
+    pollTimer = setTimeout(function () {
+      fetch('/api/job/' + jobId)
+        .then(function (r) { return r.json(); })
+        .then(function (job) {
+          if (job.error) { finishJob(null, 'Agent error: ' + job.error); return; }
+          var act = job.activity || [];
+          if (act.length > seen) {
+            for (var i = seen; i < act.length; i++) {
+              var a = act[i];
+              var label = TOOL_LABELS[a.tool] || a.tool;
+              setAgentStatus('🔧 ' + label + '…');
+              addSys('🔧 ' + a.tool + ' ' + (a.detail || ''));
+            }
+            seen = act.length;
+          }
+          if (job.status === 'done') { finishJob(job.reply, job.error); return; }
+          pollJob(jobId, seen);
+        })
+        .catch(function () { pollJob(jobId, seen); });
+    }, 800);
+  }
+
+  function finishJob(reply, err) {
+    busy = false;
+    setAgentStatus('');
+    if (err || !reply) {
+      addSys(err ? 'Hmm — ' + err : "The agent came back empty. Try again?");
+      setFace('idle');
+      return;
+    }
+    history.push({ role: 'assistant', text: reply });
+    addMsg('milk', reply);
+    speak(reply);
   }
 
   /* ---------- voice out ---------- */
@@ -191,7 +219,6 @@
     u.onstart = function () { setFace('talking'); };
     u.onend = u.onerror = function () { setFace('idle'); };
     synth.speak(u);
-    // safety: if events never fire, fall back to idle after a guess
     setTimeout(function () {
       if (faceState === 'talking' && !synth.speaking) setFace('idle');
     }, Math.min(15000, 1500 + text.length * 90));
@@ -216,9 +243,7 @@
       recognizing = false;
       if (faceState === 'listening') setFace('idle');
     };
-  } else {
-    micBtn.style.display = 'none';
-  }
+  } else { micBtn.style.display = 'none'; }
 
   micBtn.addEventListener('click', function () {
     if (!recog || busy) return;
@@ -238,16 +263,14 @@
   });
 
   sendBtn.addEventListener('click', function () { sendMessage(); });
-  input.addEventListener('keydown', function (e) {
-    if (e.key === 'Enter') sendMessage();
-  });
+  input.addEventListener('keydown', function (e) { if (e.key === 'Enter') sendMessage(); });
 
   /* ---------- boot ---------- */
   fetch('/api/status')
     .then(function (r) { return r.json(); })
     .then(function (s) {
       if (!s.brainConnected) banner.classList.remove('hidden');
-      else addSys('Brain connected. Talk to me — type, or hit the mic. 🎙');
+      else addSys('Agent online. I can search the web, run commands, work with files, and remember things. Tell me to do something. 🎙');
     })
     .catch(function () { addSys('Server reachable, status check failed.'); });
 
