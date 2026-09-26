@@ -30,6 +30,9 @@ main {
   margin-top: 10px; font-size: 13px; color: var(--dim);
   text-transform: uppercase; letter-spacing: 2px;
 }
+#agent-status {
+  margin-top: 6px; font-size: 13px; color: var(--accent); min-height: 20px;
+}
 #chat-panel {
   flex: 1; background: var(--panel); border-radius: 16px;
   display: flex; flex-direction: column; overflow: hidden; min-height: 480px;
