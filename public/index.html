@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Milk — body prototype v1</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<div id="setup-banner" class="hidden">
+  <strong>No brain connected.</strong>
+  <span>Get a free Gemini API key at <em>aistudio.google.com</em>, put it in your <code>.env</code> as <code>GEMINI_API_KEY</code>, and restart the server.</span>
+</div>
+
+<main>
+  <section id="face-panel">
+    <canvas id="face" width="480" height="360"></canvas>
+    <div id="state-label">idle</div>
+  </section>
+
+  <section id="chat-panel">
+    <div id="log"></div>
+    <div id="composer">
+      <button id="mic-btn" title="Talk (Chrome)">🎙</button>
+      <input id="input" type="text" placeholder="Talk to Milk…" autocomplete="off" />
+      <button id="send-btn">Send</button>
+      <button id="voice-btn" class="on" title="Toggle spoken replies">🔊</button>
+    </div>
+  </section>
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>
