@@ -25,6 +25,43 @@
 
   /* ---------- expressive face ---------- */
   var blinkAt = 0, blinkPhase = 0;
+
+  /* ----- idle life: wandering eyes + living mouth ----- */
+  var lookCur = {x: 0, y: 0}, lookTgt = {x: 0, y: 0}, lookAt = 0;
+  var IDLE_EXPRESSIONS = [
+    {kind: 'curve', w: 100, smile: 0.35,  open: 0.06, min: 6000,  max: 12000}, // soft smile
+    {kind: 'curve', w: 82,  smile: 0.02,  open: 0.0,  min: 5000,  max: 10000}, // neutral
+    {kind: 'o',     w: 30,  smile: 0,     open: 0.32, min: 2500,  max: 5000},  // curious
+    {kind: 'curve', w: 124, smile: 0.85,  open: 0.38, min: 4000,  max: 8000},  // happy
+    {kind: 'curve', w: 70,  smile: -0.08, open: 0.0,  min: 8000,  max: 14000}, // sleepy
+    {kind: 'o',     w: 46,  smile: 0,     open: 0.55, min: 2000,  max: 4000}   // surprised
+  ];
+  var mouthCur = {kind: 'curve', w: 100, smile: 0.35, open: 0.06};
+  var mouthTgt = {kind: 'curve', w: 100, smile: 0.35, open: 0.06};
+  var exprAt = 0;
+
+  function drawMouth(cx, my, p) {
+    if (p.kind === 'o') {
+      ctx.fillStyle = '#e8e6e3';
+      ctx.beginPath();
+      ctx.ellipse(cx, my, p.w / 2, Math.max(p.open * 46, 4), 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#0b0b10';
+      ctx.beginPath();
+      ctx.ellipse(cx, my + 3, p.w / 4, Math.max(p.open * 24, 2), 0, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      var h = 6 + p.open * 30;
+      var ctrl = p.smile * p.w * 0.5;
+      ctx.fillStyle = '#e8e6e3';
+      ctx.beginPath();
+      ctx.moveTo(cx - p.w / 2, my);
+      ctx.quadraticCurveTo(cx, my + ctrl * 0.4, cx + p.w / 2, my);
+      ctx.quadraticCurveTo(cx, my + ctrl + h, cx - p.w / 2, my);
+      ctx.closePath();
+      ctx.fill();
+    }
+  }
   function drawFace(t) {
     var W = face.width, H = face.height;
     ctx.clearRect(0, 0, W, H);
@@ -39,6 +76,29 @@
     if (bt < 140) blink = 1 - Math.sin((bt / 140) * Math.PI) * 0.92;
 
     var lookX = 0, lookY = 0;
+    if (faceState === 'idle') {
+      // saccades: pick a new glance target every couple seconds, ease toward it
+      if (t > lookAt) {
+        lookTgt.x = (Math.random() * 2 - 1) * 24;
+        lookTgt.y = (Math.random() * 2 - 1) * 13;
+        if (Math.random() < 0.18) lookTgt.y = -13 - Math.random() * 8; // curious glance up
+        lookAt = t + 1800 + Math.random() * 3200;
+      }
+      lookCur.x += (lookTgt.x - lookCur.x) * 0.09;
+      lookCur.y += (lookTgt.y - lookCur.y) * 0.09;
+      lookX = lookCur.x; lookY = lookCur.y;
+      // drift through expressions, morphing smoothly between them
+      if (t > exprAt) {
+        var e = IDLE_EXPRESSIONS[(Math.random() * IDLE_EXPRESSIONS.length) | 0];
+        mouthTgt = {kind: e.kind, w: e.w, smile: e.smile, open: e.open};
+        exprAt = t + e.min + Math.random() * (e.max - e.min);
+      }
+      mouthCur.w += (mouthTgt.w - mouthCur.w) * 0.07;
+      mouthCur.smile += (mouthTgt.smile - mouthCur.smile) * 0.07;
+      mouthCur.open += (mouthTgt.open - mouthCur.open) * 0.07;
+      if (Math.abs(mouthTgt.w - mouthCur.w) < 2 &&
+          Math.abs(mouthTgt.open - mouthCur.open) < 0.03) mouthCur.kind = mouthTgt.kind;
+    }
     if (faceState === 'thinking') { lookX = Math.sin(t / 450) * 14; lookY = -4; }
     if (faceState === 'listening') { lookY = -6; }
     if (faceState === 'talking') { lookX = Math.sin(t / 900) * 4; }
@@ -48,21 +108,25 @@
     drawEye(cx - 90, cy, eyeW, eyeH, lookX, lookY);
     drawEye(cx + 90, cy, eyeW, eyeH, lookX, lookY);
 
-    var mw = 90, mh = 12;
-    if (faceState === 'talking') {
-      mh = 10 + Math.abs(Math.sin(t / 110)) * 34 + Math.abs(Math.sin(t / 61)) * 10;
-      mw = 90 + Math.sin(t / 130) * 8;
-    } else if (faceState === 'thinking') { mh = 8; mw = 60; }
-    else if (faceState === 'listening') { mh = 16; mw = 44; }
-    ctx.fillStyle = '#e8e6e3';
-    ctx.beginPath();
-    ctx.ellipse(cx, cy + 108, mw / 2, Math.max(mh / 2, 3), 0, 0, Math.PI * 2);
-    ctx.fill();
-    if (faceState === 'talking') {
-      ctx.fillStyle = '#0b0b10';
+    if (faceState === 'idle') {
+      drawMouth(cx, cy + 108, mouthCur);
+    } else {
+      var mw = 90, mh = 12;
+      if (faceState === 'talking') {
+        mh = 10 + Math.abs(Math.sin(t / 110)) * 34 + Math.abs(Math.sin(t / 61)) * 10;
+        mw = 90 + Math.sin(t / 130) * 8;
+      } else if (faceState === 'thinking') { mh = 8; mw = 60; }
+      else if (faceState === 'listening') { mh = 16; mw = 44; }
+      ctx.fillStyle = '#e8e6e3';
       ctx.beginPath();
-      ctx.ellipse(cx, cy + 108 + mh / 6, mw / 4, Math.max(mh / 4, 2), 0, 0, Math.PI * 2);
+      ctx.ellipse(cx, cy + 108, mw / 2, Math.max(mh / 2, 3), 0, 0, Math.PI * 2);
       ctx.fill();
+      if (faceState === 'talking') {
+        ctx.fillStyle = '#0b0b10';
+        ctx.beginPath();
+        ctx.ellipse(cx, cy + 108 + mh / 6, mw / 4, Math.max(mh / 4, 2), 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
     }
     if (faceState === 'talking' || faceState === 'listening') {
       ctx.fillStyle = 'rgba(201,167,255,0.18)';
